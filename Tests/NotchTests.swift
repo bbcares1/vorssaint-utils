@@ -2372,11 +2372,23 @@ enum NotchTests {
         suite.expect(NotchSupport.filteredModules(allModules, query: "", title: { $0.rawValue }) == allModules
                && NotchSupport.filteredModules(allModules, query: "unmatched", title: { $0.rawValue }).isEmpty,
                "empty queries preserve configured ordering and unmatched queries have no action")
-        suite.expect(!NotchSupport.closesOnPointerExit(expanded: true, peeking: false, openedByHover: false),
-               "menu bar and keyboard openings survive a pointer outside the notch")
-        suite.expect(NotchSupport.closesOnPointerExit(expanded: true, peeking: false, openedByHover: true)
-               && NotchSupport.closesOnPointerExit(expanded: false, peeking: true, openedByHover: false),
-               "hover presentations still close when the pointer leaves")
+        suite.expect(NotchSupport.closesOnPointerExit(expanded: true, peeking: false)
+               && NotchSupport.closesOnPointerExit(expanded: false, peeking: true)
+               && !NotchSupport.closesOnPointerExit(expanded: false, peeking: false),
+               "open islands and previews close after pointer exit regardless of how they opened")
+        let exitFrame = CGRect(x: 100, y: 100, width: 200, height: 80)
+        let margin = NotchSupport.pointerExitMargin
+        suite.expect(margin == 16 && [CGPoint(x: 100 - margin + 1, y: 140),
+                                      CGPoint(x: 300 + margin - 1, y: 140),
+                                      CGPoint(x: 200, y: 100 - margin + 1),
+                                      CGPoint(x: 200, y: 180 + margin - 1)].allSatisfy {
+            NotchSupport.containsPointerForExit($0, in: exitFrame)
+        } && [CGPoint(x: 100 - margin - 1, y: 140),
+              CGPoint(x: 300 + margin + 1, y: 140),
+              CGPoint(x: 200, y: 100 - margin - 1),
+              CGPoint(x: 200, y: 180 + margin + 1)].allSatisfy {
+            !NotchSupport.containsPointerForExit($0, in: exitFrame)
+        }, "the open island keeps a 16-point exit gap on all four sides")
         var hover = NotchHoverState()
         hover.close(pointerInside: true)
         for _ in 0..<4 { hover.update(pointerInside: true) }

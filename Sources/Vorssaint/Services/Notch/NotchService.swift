@@ -1435,6 +1435,7 @@ final class NotchService: ObservableObject {
             if notice?.notificationID != nil { noticeWork?.cancel(); noticeWork = nil; notice = nil; noticeExpanded = false }
         }
         inside = windowHost?.containsHover(NSEvent.mouseLocation) == true
+        if !openedByHover { syncHoverExitMonitoring(entered: false, point: NSEvent.mouseLocation) }
         installEventMonitors()
         syncVisibleConsumers()
         if takeFocus { panel.makeKey() }
@@ -1559,6 +1560,12 @@ final class NotchService: ObservableObject {
             if !inside { releaseNotification() }
             return
         }
+        // The clear margin is part of the open island's exit zone, even
+        // though it is not part of its interactive hover area.
+        if (expanded || peeking), windowHost?.containsHoverExit(point) == true {
+            hoverWork?.cancel(); hoverWork = nil
+            return
+        }
         // Overlapping tracking areas can report the same presence repeatedly.
         // Keep the first deadline until the pointer actually crosses the boundary.
         if inside == wasInside, let hoverWork, !hoverWork.isCancelled { return }
@@ -1598,17 +1605,17 @@ final class NotchService: ObservableObject {
             let delay = NotchSupport.sanitizedHoverDelay(UserDefaults.standard.double(forKey: DefaultsKey.notchHoverDelay))
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         } else if holdsNotification
-                    || NotchSupport.closesOnPointerExit(expanded: expanded, peeking: peeking, openedByHover: openedByHover) {
+                    || NotchSupport.closesOnPointerExit(expanded: expanded, peeking: peeking) {
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.hoverWork = nil
                 guard self.running, !self.suspended, !self.inside,
-                      self.windowHost?.containsHover(NSEvent.mouseLocation) != true,
+                      self.windowHost?.containsHoverExit(NSEvent.mouseLocation) != true,
                       !self.pointerOverChildWindow(NSEvent.mouseLocation) else { return }
                 self.releaseNotification()
                 guard !self.pinned, !self.heldDrag, !self.keepsWorkingSurface, self.captureControls == nil,
                       !AssistiveKeyboard.ownsCocoaPoint(NSEvent.mouseLocation),
-                      NotchSupport.closesOnPointerExit(expanded: self.expanded, peeking: self.peeking, openedByHover: self.openedByHover) else { return }
+                      NotchSupport.closesOnPointerExit(expanded: self.expanded, peeking: self.peeking) else { return }
                 self.collapse()
             }
             hoverWork = work
@@ -1638,11 +1645,13 @@ final class NotchService: ObservableObject {
         // The music strip's name, or a song paused from its button, lasts
         // until the pointer leaves, with or without an emphasis to follow.
         let keepsMusicStrip = musicStripNamed || musicStripHeldSong != nil
+        let followsDirectOpening = expanded && !openedByHover
         let watching = ((hoverEmphasized || followsClosedHover || keepsMusicStrip) && captureHover == nil
-                || !entered && NotchSupport.closesOnPointerExit(expanded: expanded, peeking: peeking, openedByHover: openedByHover))
+                || followsDirectOpening
+                || !entered && NotchSupport.closesOnPointerExit(expanded: expanded, peeking: peeking))
             && captureControls == nil && !pinned && !heldDrag && !hiddenUntilHover && !keepsWorkingSurface
             // Once watching, a pointer that leaves and slips back unreported is still seen.
-            && (!hoverExitMonitors.isEmpty || windowHost?.containsHover(point) == true)
+            && (!hoverExitMonitors.isEmpty || followsDirectOpening || windowHost?.containsHover(point) == true)
         guard watching else { removeHoverExitMonitors(); return }
         guard hoverExitMonitors.isEmpty else { return }
         let moves: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]

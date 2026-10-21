@@ -511,6 +511,18 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
         return container.hoverRects.contains { $0.contains(point) }
     }
 
+    /// The pointer may pass through a small clear gap on any side of an open
+    /// island or a floating control without starting its departure timer.
+    func containsHoverExit(_ screenPoint: CGPoint) -> Bool {
+        guard isPresented, !concealedForMissionControl else { return false }
+        if NotchSupport.containsPointerForExit(screenPoint, in: currentGeometry.frame(for: targetSize)) {
+            return true
+        }
+        guard let container = quickAccessContainer else { return false }
+        let point = container.convert(panel.convertPoint(fromScreen: screenPoint), from: nil)
+        return container.hoverRects.contains { NotchSupport.containsPointerForExit(point, in: $0) }
+    }
+
     func whenSettled(_ action: @escaping () -> Void) {
         settledActions.append(action)
         if !isAnimating { runSettledActions() }

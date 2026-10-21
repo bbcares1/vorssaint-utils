@@ -1665,8 +1665,14 @@ enum NotchSupport {
         value.isFinite ? min(hoverDelayRange.upperBound, max(hoverDelayRange.lowerBound, value)) : defaultHoverDelay
     }
 
-    /// How long an island opened by hover waits after the pointer leaves.
+    /// How long an open island waits after the pointer leaves.
     static let defaultCloseDelay = NotchQuickAccessLayout.hoverExitDelay
+    /// Space around the open island and its floating controls before departure begins.
+    static let pointerExitMargin: CGFloat = 16
+
+    static func containsPointerForExit(_ point: CGPoint, in frame: CGRect) -> Bool {
+        frame.insetBy(dx: -pointerExitMargin, dy: -pointerExitMargin).contains(point)
+    }
     static let closeDelayRange = 0.10...2.0
 
     static func sanitizedCloseDelay(_ value: TimeInterval) -> TimeInterval {
@@ -1997,10 +2003,10 @@ enum NotchSupport {
             + (AppFeature.connectedDevices.isAvailable(in: defaults) ? 1 : 0)
     }
 
-    /// Direct openings are dismissed explicitly, never by the pointer's
-    /// initial position at the menu bar or in the application being used.
-    static func closesOnPointerExit(expanded: Bool, peeking: Bool, openedByHover: Bool) -> Bool {
-        peeking || (expanded && openedByHover)
+    /// Every open island follows the pointer; the initial pointer position
+    /// cannot dismiss one until a movement event arrives.
+    static func closesOnPointerExit(expanded: Bool, peeking: Bool) -> Bool {
+        expanded || peeking
     }
 
     /// Another app becoming active closes the open island like a click away.

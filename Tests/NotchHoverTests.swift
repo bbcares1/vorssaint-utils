@@ -58,6 +58,11 @@ enum NotchHoverTests {
             visible && !isConcealedForMissionControl && (CGRect(origin: .zero, size: rect.size)
                 .contains(CGPoint(x: point.x - rect.minX, y: rect.maxY - point.y)) || controls.contains { $0.contains(point) })
         }
+        func containsHoverExit(_ point: CGPoint) -> Bool {
+            visible && !isConcealedForMissionControl &&
+                (NotchSupport.containsPointerForExit(point, in: rect)
+                 || controls.contains { NotchSupport.containsPointerForExit(point, in: $0) })
+        }
     }
     enum NotchContentTransition { case none, reveal, dismiss, depart, replace }
     enum NotchMusicService {
@@ -152,11 +157,14 @@ enum NotchHoverTests {
         }
         var openings = 0, closures = 0, feedbacks = 0
         var requestedModule: NotchModule?
+        var onDirectOpen: ((CGPoint) -> Void)?
         func open(_ module: NotchModule? = nil, takeFocus: Bool) {
             requestedModule = module
             openings += 1; expanded = true; openedByHover = !takeFocus
             hoverState.open(); hoverWork?.cancel(); hoverWork = nil
             updateBounds()
+            inside = windowHost?.containsHover(NSEvent.mouseLocation) == true
+            if !openedByHover { onDirectOpen?(NSEvent.mouseLocation) }
         }
         func collapse() {
             // The production collapse refuses while a drag holds the island.
@@ -192,6 +200,9 @@ enum NotchHoverTests {
             AssistiveKeyboard.active = false
             NSWorkspace.shared.accessibilityDisplayShouldReduceMotion = false
             let service = Service()
+            service.onDirectOpen = { [weak service] point in
+                service?.syncHoverExitMonitoring(entered: false, point: point)
+            }
             if physical {
                 service.geometry = NotchGeometry(screen: CGRect(x: 0, y: 0, width: 1470, height: 956),
                                                  safeAreaTop: 32, cameraWidth: 180, compactSideRoom: 64)
@@ -576,8 +587,12 @@ enum NotchHoverTests {
         clickOpened.windowHost?.controls = [CGRect(x: island.midX - 38, y: island.minY - 72, width: 76, height: 88)]
         NSEvent.mouseLocation = CGPoint(x: island.midX, y: island.minY - 60)
         clickOpened.hover(false)
-        suite.expect(NSEvent.global.isEmpty && NSEvent.local.isEmpty,
-                     "an island opened by a click, which leaving does not close, never follows the pointer")
+        suite.expect(NSEvent.global.count == 1 && NSEvent.local.count == 1 && clickOpened.expanded,
+                     "an island opened by a click also follows movement across its controls")
+        follow(to: CGPoint(x: island.midX, y: island.minY - 400))
+        DispatchQueue.main.advance(0.19)
+        suite.expect(clickOpened.closures == 1,
+                     "leaving the floating controls closes a click-opened island")
         // Passing quickly over the closed island to a display above: the last
         // exit arrives while the pointer still touches the island's top edge.
         do {
@@ -955,8 +970,56 @@ enum NotchHoverTests {
         let clicked = fixture()
         clicked.open(nil, takeFocus: true)
         leave(clicked)
+        DispatchQueue.main.advance(0.17)
+        suite.expect(clicked.closures == 0, "a click-opened island waits for the usual exit delay")
+        DispatchQueue.main.advance(0.02)
+        suite.expect(clicked.closures == 1, "a click-opened island closes without another click")
+
+        let shortcut = fixture()
+        let away = CGPoint(x: shortcut.geometry.screen.minX + 80, y: shortcut.geometry.screen.minY + 80)
+        NSEvent.mouseLocation = away
+        shortcut.open(takeFocus: true)
         DispatchQueue.main.advance(1)
-        suite.expect(clicked.closures == 0, "a panel opened by click stays open when the pointer leaves")
+        suite.expect(shortcut.expanded && shortcut.closures == 0,
+                     "opening from a shortcut does not close merely because the pointer starts elsewhere")
+        follow(to: CGPoint(x: away.x + 20, y: away.y))
+        DispatchQueue.main.advance(0.19)
+        suite.expect(shortcut.closures == 1,
+                     "the first pointer movement outside the exit zone closes a shortcut-opened island")
+
+        // A pointer can leave the visible body in any direction and return
+        // through the clear margin before the normal departure deadline.
+        for physical in [false, true] {
+            for direction in [CGPoint(x: -1, y: 0), CGPoint(x: 1, y: 0),
+                              CGPoint(x: 0, y: -1), CGPoint(x: 0, y: 1)] {
+                let near = fixture(physical: physical)
+                near.open(takeFocus: true)
+                let frame = near.windowHost!.rect
+                let margin = NotchSupport.pointerExitMargin
+                let nearby = CGPoint(x: direction.x < 0 ? frame.minX - margin / 2
+                                          : direction.x > 0 ? frame.maxX + margin / 2 : frame.midX,
+                                     y: direction.y < 0 ? frame.minY - margin / 2
+                                          : direction.y > 0 ? frame.maxY + margin / 2 : frame.midY)
+                follow(to: nearby)
+                DispatchQueue.main.advance(0.5)
+                suite.expect(near.expanded && near.closures == 0 && near.hoverWork == nil,
+                             "the pointer may rest in the exit gap on any side of either island")
+                let beyond = CGPoint(x: direction.x < 0 ? frame.minX - margin - 4
+                                          : direction.x > 0 ? frame.maxX + margin + 4 : frame.midX,
+                                     y: direction.y < 0 ? frame.minY - margin - 4
+                                          : direction.y > 0 ? frame.maxY + margin + 4 : frame.midY)
+                follow(to: beyond)
+                let deadline = near.hoverWork
+                DispatchQueue.main.advance(0.1)
+                follow(to: nearby)
+                suite.expect(deadline != nil && near.hoverWork == nil,
+                             "returning to the exit gap cancels the pending close")
+                follow(to: beyond)
+                DispatchQueue.main.advance(0.19)
+                suite.expect(near.closures == 1,
+                             "crossing beyond the gap closes the island after the normal delay")
+            }
+        }
 
         let keyboard = fixture()
         keyboard.open(nil, takeFocus: false)

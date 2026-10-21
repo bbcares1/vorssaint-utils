@@ -129,6 +129,7 @@ enum NotchDestinationContract {
         var captureClose: (() -> Void)?
         func mutatePresentation(transitionContent: NotchContentTransition, _ change: () -> Void) { change() }
         func installEventMonitors() {}
+        func syncHoverExitMonitoring(entered: Bool, point: CGPoint) {}
         func syncVisibleConsumers() { requestedDetail = selectedMetric }
         func provideHapticFeedback() {}
         func endCaptureControls() {}
