@@ -96,6 +96,7 @@ enum NotchHoverTests {
         /// Hidden until hover and set to show activity, as Settings has it.
         var hiddenShowsActivity = false
         var running = true, suspended = false, inside = false, hoverEmphasized = false
+        var lastHoverPointer: CGPoint?
         var pinned = false, heldDrag = false, keepsWorkingSurface = false
         var expanded = false, peeking = false, dragPlaceholder = false, openedByHover = false
         var captureControls: Bool?, notice: NotchNotice?
@@ -158,7 +159,7 @@ enum NotchHoverTests {
         var openings = 0, closures = 0, feedbacks = 0
         var requestedModule: NotchModule?
         var onDirectOpen: ((CGPoint) -> Void)?
-        func open(_ module: NotchModule? = nil, takeFocus: Bool) {
+        func open(_ module: NotchModule? = nil, takeFocus: Bool, feedback: Bool = true) {
             requestedModule = module
             openings += 1; expanded = true; openedByHover = !takeFocus
             hoverState.open(); hoverWork?.cancel(); hoverWork = nil
@@ -183,6 +184,7 @@ enum NotchHoverTests {
         func bridgeMascotHome(from: CGFloat) {}
         func syncMenuSpaceMonitoring() { menuSpaceSyncs += 1 }
         func provideHapticFeedback() { feedbacks += 1 }
+        func providePointerHapticFeedback() { feedbacks += 1 }
         func updateBounds() { windowHost?.rect = geometry.frame(for: surfaceSize) }
     }
 
@@ -209,12 +211,81 @@ enum NotchHoverTests {
             }
             service.updateBounds()
             NSEvent.mouseLocation = CGPoint(x: service.geometry.screen.midX, y: service.geometry.screen.maxY)
+            service.lastHoverPointer = CGPoint(x: service.geometry.screen.minX, y: service.geometry.screen.minY)
             return service
         }
         func leave(_ service: Service) {
             NSEvent.mouseLocation = CGPoint(x: service.geometry.screen.minX, y: service.geometry.screen.minY)
             service.hover(false)
         }
+        let tactileActivities: [NotchCompactActivity?] = [nil, .music, .timer]
+        for physical in [false, true] {
+            for activity in tactileActivities {
+                for expanded in [false, true] {
+                    let tactile = fixture(physical: physical)
+                    UserDefaults.standard.enabled = false
+                    tactile.compactActivity = activity
+                    tactile.updateBounds()
+                    let away = CGPoint(x: tactile.geometry.screen.minX + 20, y: tactile.geometry.screen.minY + 20)
+                    NSEvent.mouseLocation = away
+                    tactile.lastHoverPointer = away
+                    if expanded { tactile.open(takeFocus: true) }
+                    let frame = tactile.windowHost!.rect
+                    let onIsland = CGPoint(x: frame.midX, y: frame.midY)
+                    NSEvent.mouseLocation = onIsland
+                    tactile.hover(true)
+                    expect(tactile.feedbacks == 1,
+                           "entering a resting or open island taps once with or without music or a timer")
+                    tactile.hover(false)
+                    expect(tactile.feedbacks == 1, "duplicate tracking events do not repeat the entry tap")
+                    let enteredFrame = tactile.windowHost!.rect
+                    NSEvent.mouseLocation = CGPoint(x: enteredFrame.maxX + 2, y: enteredFrame.midY)
+                    tactile.hover(false)
+                    expect(tactile.feedbacks == 2,
+                           "leaving the visible island taps at its boundary, before the close margin")
+                    tactile.hover(false)
+                    expect(tactile.feedbacks == 2, "continued movement outside does not repeat the exit tap")
+                    NSEvent.mouseLocation = onIsland
+                    tactile.hover(true)
+                    expect(tactile.feedbacks == 3, "returning across the boundary taps once again")
+                    tactile.inside = false // A resize can report entry without pointer movement.
+                    tactile.hover(true)
+                    expect(tactile.feedbacks == 3,
+                           "an island changing size under a stationary pointer does not tap")
+                }
+            }
+        }
+        let hiddenTactile = fixture()
+        UserDefaults.standard.hides = true
+        hiddenTactile.windowHost?.visible = false
+        let hiddenFrame = hiddenTactile.geometry.frame(for: hiddenTactile.geometry.collapsed)
+        NSEvent.mouseLocation = CGPoint(x: hiddenFrame.midX, y: hiddenFrame.midY)
+        hiddenTactile.hover(true)
+        expect(hiddenTactile.feedbacks == 1,
+               "entering a hidden-until-hover island's trigger zone taps before its window is visible")
+        leave(hiddenTactile)
+        expect(hiddenTactile.feedbacks == 2, "leaving a hidden island's trigger zone taps once")
+
+        for prepare: (Service) -> Void in [
+            { $0.notice = volume; $0.updateBounds() },
+            { $0.captureControls = true },
+            { $0.open(takeFocus: true); $0.pinned = true }
+        ] {
+            let tactile = fixture()
+            UserDefaults.standard.enabled = false
+            let away = CGPoint(x: tactile.geometry.screen.minX + 20, y: tactile.geometry.screen.minY + 20)
+            NSEvent.mouseLocation = away
+            tactile.lastHoverPointer = away
+            prepare(tactile)
+            let frame = tactile.windowHost!.rect
+            NSEvent.mouseLocation = CGPoint(x: frame.midX, y: frame.midY)
+            tactile.hover(true)
+            NSEvent.mouseLocation = CGPoint(x: frame.maxX + 20, y: frame.midY)
+            tactile.hover(false)
+            expect(tactile.feedbacks == 2,
+                   "notices, capture controls and pinned pages retain both boundary taps")
+        }
+
         for physical in [false, true] {
             for reduced in [false, true] {
                 let picker = fixture(physical: physical)

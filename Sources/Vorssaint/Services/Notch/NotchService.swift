@@ -203,6 +203,9 @@ final class NotchService: ObservableObject {
     private var captureHover: ((Bool) -> Void)?
     private var captureClosesOnCollapse = false
     private var inside = false
+    /// Only pointer movement across the island's boundary gets a hover tap;
+    /// layout changes can send tracking events under a stationary pointer.
+    private var lastHoverPointer: CGPoint?
     private var hoverEmphasized = false
     private var activitySelection = NotchActivitySelection()
     private var activityPickerMenuOpen = false
@@ -1306,6 +1309,7 @@ final class NotchService: ObservableObject {
         highlightedSection = nil
         sectionRow = 0
         inside = false
+        lastHoverPointer = nil
         _ = endMusicStripHover(leaving: true)
         endMusicStripRequest()
         hoverEmphasized = false
@@ -1525,6 +1529,8 @@ final class NotchService: ObservableObject {
         inside = watchesHiddenHover ? geometry.contains(point, in: geometry.collapsed)
             && windowHost?.isConcealedForMissionControl == false
             : windowHost?.containsHover(point) == true || pointerOverChildWindow(point)
+        if inside != wasInside, point != lastHoverPointer { providePointerHapticFeedback() }
+        lastHoverPointer = point
         hoverState.update(pointerInside: inside)
         // The music strip names its song only while the pointer stays on the
         // island: leaving ends it, and a name left from before goes on return.
@@ -1595,10 +1601,9 @@ final class NotchService: ObservableObject {
                 // Following the closed island ends as it opens or peeks.
                 self.removeHoverExitMonitors()
                 if UserDefaults.standard.bool(forKey: DefaultsKey.notchHoverExpands) {
-                    self.open(takeFocus: false)
+                    self.open(takeFocus: false, feedback: false)
                 } else {
                     self.mutatePresentation(transitionContent: .reveal) { self.peeking = true }
-                    self.provideHapticFeedback()
                 }
             }
             hoverWork = work
@@ -1689,7 +1694,6 @@ final class NotchService: ObservableObject {
                   UserDefaults.standard.bool(forKey: DefaultsKey.notchOpenOnHover),
                   self.geometry.contains(NSEvent.mouseLocation, in: self.surfaceSize) else { return }
             self.mutatePresentation(transitionContent: .reveal) { self.peeking = false; self.noticeExpanded = true }
-            self.provideHapticFeedback()
         }
         hoverWork = work
         let delay = NotchSupport.sanitizedHoverDelay(UserDefaults.standard.double(forKey: DefaultsKey.notchHoverDelay))
@@ -1974,6 +1978,13 @@ final class NotchService: ObservableObject {
 
     func provideHapticFeedback() {
         guard acceptsUserInteraction, panel?.isVisible == true, NotchSupport.usesHapticFeedback() else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+    }
+
+    private func providePointerHapticFeedback() {
+        // Hidden-until-hover islands have a real pointer entry zone even
+        // before their panel becomes visible.
+        guard acceptsUserInteraction, NotchSupport.usesHapticFeedback() else { return }
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
     }
 
@@ -3421,6 +3432,7 @@ final class NotchService: ObservableObject {
             windowHost = NotchWindowHost(content: AnyView(NotchView(service: self)), geometry: geometry, size: surfaceSize,
                                         background: { AnyView(NotchWindowBackground(presentation: $0)) },
                                         quickAccess: { AnyView(NotchQuickAccessView(service: self, motion: $0, backdrop: $1)) })
+            lastHoverPointer = NSEvent.mouseLocation
             windowHost?.missionControlDidRestore = { [weak self] in self?.missionControlDidRestore() }
             windowHost?.setHoverHandler { [weak self] in self?.hover($0) }
             panel?.title = FeatureStrings.notch(L10n.shared.language).title
