@@ -3,7 +3,7 @@
 
 import Foundation
 
-struct NotchMusicIdentity: Equatable {
+struct NotchMusicIdentity: Hashable {
     let title: String
     let artist: String
     let album: String

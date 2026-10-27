@@ -450,6 +450,7 @@ final class NotchMusicService: ObservableObject {
 
     func setQueueVisible(_ visible: Bool) {
         queueVisible = visible && NotchQueueSupport.isEnabled() && playback != nil
+            && playback?.track.appBundleIdentifier != "com.tencent.QQMusicMac"
         guard queueVisible else {
             commandWriter.setQueueRequest(nil)
             if queueRequest != nil { send(.queueStop) }

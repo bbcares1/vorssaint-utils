@@ -730,6 +730,14 @@ enum NotchMusicHardeningTests {
         service.playbackChanged(nil)
         suite.expect(service.track == nil && service.lyrics == nil, "an actual empty playback snapshot clears the cache")
         NotchLyricsContract.Preferences.online = true
+        let qqTrack = RadialNowPlayingSnapshot(title: "QQ Song", artist: "Example", album: "Recording",
+            artworkData: nil, appBundleIdentifier: "com.tencent.QQMusicMac", appPID: 42)
+        let qqPlayback = NotchPlayback(track: qqTrack, isPlaying: true, elapsed: 0, duration: 180,
+                                       rate: 1, sampledAt: Date(), canSeek: false)
+        let qqService = NotchLyricsContract.Service()
+        qqService.update(playback: qqPlayback, visible: true)
+        suite.expect(qqService.loads.isEmpty && qqService.lyrics == nil,
+                     "QQ uses local lyrics even when online title lookup is enabled")
         service.update(playback: current, visible: true)
         let download = service.session
         let panel = NotchLyricsContract.Panel(); service.importPanel = panel

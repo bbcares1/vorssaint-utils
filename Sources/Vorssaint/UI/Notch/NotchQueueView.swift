@@ -10,6 +10,14 @@ struct NotchQueueView: View {
     private var text: NotchMusicExtrasStrings { FeatureStrings.notchMusicExtras(l10n.language) }
 
     var body: some View {
+        if playback.track.appBundleIdentifier == NotchQQMusicSupport.bundleIdentifier {
+            NotchQQMusicView(playback: playback, showsLyrics: false)
+        } else {
+            standardBody
+        }
+    }
+
+    private var standardBody: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(text.queue).font(.callout.weight(.semibold))

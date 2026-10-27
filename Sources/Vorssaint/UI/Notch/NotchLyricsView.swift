@@ -14,6 +14,14 @@ struct NotchLyricsView: View {
     // The verses sit on the island itself, as a player's own lyrics do, and
     // a song without them says so like the island's other empty pages.
     var body: some View {
+        if playback.track.appBundleIdentifier == NotchQQMusicSupport.bundleIdentifier {
+            NotchQQMusicView(playback: playback, showsLyrics: true)
+        } else {
+            standardBody
+        }
+    }
+
+    private var standardBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let lyrics = service.lyrics {
                 if lyrics.instrumental {
@@ -114,8 +122,20 @@ struct NotchLyricsView: View {
     }
 
     private func synced(_ lyrics: NotchLyrics) -> some View {
-        TimelineView(.explicit(lyrics.changeDates(for: playback, offset: service.offset, from: .now))) { context in
-            let active = lyrics.activeIndex(at: playback.position(at: context.date), offset: service.offset)
+        NotchSyncedLyricsView(lyrics: lyrics, playback: playback, offset: service.offset, text: text)
+    }
+}
+
+struct NotchSyncedLyricsView: View {
+    let lyrics: NotchLyrics
+    let playback: NotchPlayback
+    let offset: Double
+    let text: NotchMusicExtrasStrings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.explicit(lyrics.changeDates(for: playback, offset: offset, from: .now))) { context in
+            let active = lyrics.activeIndex(at: playback.position(at: context.date), offset: offset)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {

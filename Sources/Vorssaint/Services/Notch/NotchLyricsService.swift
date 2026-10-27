@@ -27,6 +27,8 @@ final class NotchLyricsService: ObservableObject {
     private init() {}
 
     func update(playback: NotchPlayback?, visible: Bool) {
+        // QQ Music uses its own local lyric cache, never a title-based online search.
+        guard playback?.track.appBundleIdentifier != "com.tencent.QQMusicMac" else { stop(); return }
         guard NotchLyricsSupport.isEnabled() else { stop(); return }
         let next = playback.map(NotchMusicIdentity.init)
         let wanted = visible && next != nil
