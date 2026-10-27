@@ -48,13 +48,15 @@ struct NotchQQMusicView: View {
                 } else {
                     empty(text.noLyrics)
                 }
+            } else if let snapshot = service.snapshot, snapshot.playlist.songs.isEmpty {
+                empty(common.queueEmpty)
             } else if let snapshot = service.snapshot {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(snapshot.playlist.songs) { song in
                                 HStack(spacing: 10) {
-                                    if song.index == snapshot.currentIndex {
+                                    if song.id == snapshot.currentSong?.id {
                                         Image(systemName: playback.isPlaying ? "speaker.wave.2.fill" : "pause.fill")
                                             .frame(width: 24).foregroundStyle(.tint)
                                     } else {
@@ -65,7 +67,7 @@ struct NotchQQMusicView: View {
                                         Text(song.title).font(.callout.weight(.medium)).lineLimit(1)
                                         Text(song.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                     }.frame(maxWidth: .infinity, alignment: .leading)
-                                    Text(String(format: "%d:%02d", Int(song.duration) / 60, Int(song.duration) % 60))
+                                    Text(song.duration > 0 ? String(format: "%d:%02d", Int(song.duration) / 60, Int(song.duration) % 60) : "—")
                                         .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                                 }
                                 .padding(.vertical, 8)
@@ -74,8 +76,8 @@ struct NotchQQMusicView: View {
                         }
                     }
                     .notchScrollEdgeFade()
-                    .onChange(of: snapshot.playlist.songs[snapshot.currentIndex].id, initial: true) { _, id in
-                        proxy.scrollTo(id, anchor: .center)
+                    .onChange(of: snapshot.currentSong?.id, initial: true) { _, id in
+                        if let id { proxy.scrollTo(id, anchor: .center) }
                     }
                 }
             }

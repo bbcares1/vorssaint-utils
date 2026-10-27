@@ -39,6 +39,46 @@ enum NotchQQMusicTests {
             suite.expect(ambiguous.currentIndex(title: song.title, artist: song.artist, album: song.album, duration: song.duration) == nil,
                          "QQ duplicate recordings require an actual current index")
         }
+        var wrappedObjects = objects
+        wrappedObjects[4] = ["NS.string": "A Song & More"]
+        wrappedObjects[7] = ["NS.string": reference(13)]
+        wrappedObjects[12] = ["NS.string": "An Album"]
+        wrappedObjects.append("An Artist")
+        let wrapped = Support.decodePlaylist(archive(wrappedObjects, top: ["PlayingList": reference(1), "LastPlayingIndex": 0]))
+        suite.expect(wrapped?.songs.count == 2 && wrapped?.songs.first?.title == "A Song & More"
+                     && wrapped?.songs.first?.artist == "An Artist" && wrapped?.songs.first?.album == "An Album",
+                     "QQ mutable string titles and referenced artist strings do not reject an entire playlist")
+        var collaborationObjects = objects
+        var collaborationSong = collaborationObjects[3] as! [String: Any]
+        collaborationSong["singerList"] = reference(13)
+        collaborationObjects[3] = collaborationSong
+        collaborationObjects.append(["NS.objects": [reference(6), reference(14)]])
+        collaborationObjects.append(["name": "Guest Artist"])
+        let collaboration = Support.decodePlaylist(archive(collaborationObjects, top: ["PlayingList": reference(1), "LastPlayingIndex": 0]))
+        suite.expect(collaboration?.songs.first?.artist == "An Artist / Guest Artist"
+                     && collaboration?.currentIndex(title: "A Song", artist: "An Artist", album: "An Album", duration: 180) == 0
+                     && collaboration?.currentIndex(title: "A Song", artist: "An Artist / Guest Artist", album: "An Album", duration: 180) == 0,
+                     "QQ collaborations match either the reported primary artist or complete credits without dropping displayed credits")
+        var partialObjects = objects
+        var partialSong = partialObjects[3] as! [String: Any]
+        partialSong.removeValue(forKey: "singerInfo")
+        partialSong.removeValue(forKey: "songId")
+        partialSong["song_Duration"] = "unknown"
+        partialObjects[3] = partialSong
+        let partial = Support.decodePlaylist(archive(partialObjects, top: ["PlayingList": reference(1)]))
+        suite.expect(partial?.songs.count == 2 && partial?.songs.first?.title == "A Song"
+                     && partial?.songs.first?.duration == 0 && partial?.songs.first?.songID == 0,
+                     "QQ optional metadata and an absent saved index never hide an otherwise readable queue")
+        var malformedObjects = objects
+        malformedObjects[3] = "unreadable row"
+        let remaining = Support.decodePlaylist(archive(malformedObjects, top: ["PlayingList": reference(1), "LastPlayingIndex": 1]))
+        suite.expect(remaining?.songs.count == 1 && remaining?.songs.first?.index == 1
+                     && remaining?.currentIndex(title: "Another Song", artist: "An Artist", album: "", duration: 180) == 0,
+                     "QQ skips an unreadable row without renumbering the remaining source entries or losing the current song")
+        var cyclicObjects = objects
+        cyclicObjects[4] = ["NS.string": reference(4)]
+        let cyclic = Support.decodePlaylist(archive(cyclicObjects, top: ["PlayingList": reference(1), "LastPlayingIndex": 1]))
+        suite.expect(cyclic?.songs.count == 1, "QQ cyclic string wrappers are bounded and do not hide valid rows")
         suite.expect(Support.decodePlaylist(Data("invalid".utf8)) == nil, "QQ truncated archives fail closed")
         let broken = archive(objects, top: ["PlayingList": reference(9999), "LastPlayingIndex": 0])
         suite.expect(Support.decodePlaylist(broken) == nil, "QQ invalid references cannot index outside the object table")
@@ -102,6 +142,26 @@ enum NotchQQMusicTests {
             suite.expect(Support.readLyric(folder: root, songID: 999) == nil, "QQ missing lyric does not reuse a different song")
             let queueOnly = try Support.read(folder: root, title: "A Song", artist: "An Artist", album: "", duration: 180, includeLyrics: false)
             suite.expect(queueOnly.lyric == nil, "QQ queue view does not read lyric data")
+            let withoutMetadata = try Support.read(folder: root, title: "", artist: "", album: "", duration: 0, includeLyrics: false)
+            suite.expect(withoutMetadata.playlist.songs.count == 2 && withoutMetadata.currentSong == nil,
+                         "QQ queue is visible while current-player metadata is missing, without guessing a highlighted song")
+            let albumMismatch = try Support.read(folder: root, title: "A Song", artist: "An Artist", album: "Different release", duration: 180, includeLyrics: false)
+            suite.expect(albumMismatch.playlist.songs.count == 2 && albumMismatch.currentSong?.songID == 123,
+                         "QQ optional album differences never suppress the real queue or its playing marker")
+            do {
+                _ = try Support.read(folder: root, title: "A Song", artist: "An Artist", album: "Different release", duration: 180, includeLyrics: true)
+                suite.expect(false, "QQ mismatched recordings must not supply lyrics")
+            } catch Support.ReadError.waiting {
+                suite.expect(true, "QQ lyric identity checks remain strict even when queue display is independent")
+            }
+            let singleObjects: [Any] = ["$null", ["ListData": reference(2)], ["NS.objects": [reference(3)]],
+                ["songName": "Single selection", "songId": 789, "song_Duration": "120.5"]]
+            try archive(singleObjects, top: ["PlayingList": reference(1), "LastPlayingIndex": 0])
+                .write(to: root.appendingPathComponent("iTemp/PlayingList.archive"))
+            let single = try Support.read(folder: root, title: "Single selection", artist: "", album: "", duration: 120.5, includeLyrics: false)
+            suite.expect(single.playlist.songs.count == 1 && single.playlist.songs[0].duration == 120.5,
+                         "QQ one-off song selection and numeric string durations form a readable queue")
+            try data.write(to: root.appendingPathComponent("iTemp/PlayingList.archive"))
             let cache = Support.Cache()
             _ = try Support.read(folder: root, title: "A Song", artist: "An Artist", album: "", duration: 180, includeLyrics: true, cache: cache)
             let replacement = archive(["$null", "[00:02.00]Updated"], top: ["root": reference(1)])

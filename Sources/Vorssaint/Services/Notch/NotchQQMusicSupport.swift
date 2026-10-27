@@ -21,6 +21,7 @@ enum NotchQQMusicSupport {
         let artist: String
         let album: String
         let duration: Double
+        var primaryArtist: String = ""
         var id: String { "\(index):\(songID):\(mid)" }
     }
     struct Playlist: Equatable {
@@ -30,19 +31,25 @@ enum NotchQQMusicSupport {
         func currentIndex(title: String, artist: String, album: String, duration: Double) -> Int? {
             guard !title.isEmpty, !artist.isEmpty, duration.isFinite, duration > 0 else { return nil }
             func matches(_ song: Song) -> Bool {
-                normalize(song.title) == normalize(title) && normalize(song.artist) == normalize(artist)
+                normalize(song.title) == normalize(title)
+                    && [song.artist, song.primaryArtist].contains { normalize($0) == normalize(artist) }
                     && abs(song.duration - duration) <= 3
                     && (album.isEmpty || song.album.isEmpty || normalize(song.album) == normalize(album))
             }
-            if songs.indices.contains(savedIndex), matches(songs[savedIndex]) { return savedIndex }
+            if let position = songs.firstIndex(where: { $0.index == savedIndex }), matches(songs[position]) { return position }
             let candidates = songs.indices.filter { matches(songs[$0]) }
             return candidates.count == 1 ? candidates[0] : nil
         }
     }
     struct Snapshot: Equatable {
         let playlist: Playlist
-        let currentIndex: Int
+        /// Position in decoded songs, which can differ from QQ's source index
+        /// if one malformed row was omitted. Nil leaves the queue visible.
+        let currentIndex: Int?
         let lyric: String?
+        var currentSong: Song? {
+            currentIndex.flatMap { playlist.songs.indices.contains($0) ? playlist.songs[$0] : nil }
+        }
     }
     enum ReadError: Error { case access, unsupported, waiting }
 
@@ -70,9 +77,16 @@ enum NotchQQMusicSupport {
         let decoded = cache?.archiveData == data ? cache?.playlist : decodePlaylist(data)
         guard let playlist = decoded else { throw ReadError.unsupported }
         cache?.archiveData = data; cache?.playlist = playlist
-        guard let index = playlist.currentIndex(title: title, artist: artist, album: album, duration: duration)
-        else { throw ReadError.waiting }
-        let lyric = includeLyrics ? readLyric(folder: folder, songID: playlist.songs[index].songID, cache: cache) : nil
+        // The queue is QQ's own saved array and does not depend on matching
+        // the current song's optional metadata. Lyrics still need a verified
+        // recording before using its song ID.
+        let lyricIndex = playlist.currentIndex(title: title, artist: artist, album: album, duration: duration)
+        if includeLyrics && lyricIndex == nil { throw ReadError.waiting }
+        let index = includeLyrics ? lyricIndex
+            : playlist.currentIndex(title: title, artist: artist, album: "", duration: duration)
+        let lyric = includeLyrics ? lyricIndex.flatMap {
+            readLyric(folder: folder, songID: playlist.songs[$0].songID, cache: cache)
+        } : nil
         // Do not combine a queue before a rewrite with lyrics from after it.
         guard try boundedData(path, limit: maximumArchiveBytes) == data else { throw ReadError.waiting }
         return Snapshot(playlist: playlist, currentIndex: index, lyric: lyric)
@@ -82,16 +96,16 @@ enum NotchQQMusicSupport {
         guard let archive = Archive(data, limit: maximumArchiveBytes),
               let list = archive.dictionary(archive.top["PlayingList"]),
               let entries = archive.dictionary(list["ListData"])?["NS.objects"] as? [Any],
-              entries.count <= 10_000,
-              let savedIndex = archive.top["LastPlayingIndex"] as? Int else { return nil }
+              entries.count <= 10_000 else { return nil }
+        let savedIndex = archive.top["LastPlayingIndex"] as? Int ?? -1
         var songs: [Song] = []
         for (index, entry) in entries.enumerated() {
-            guard let song = archive.dictionary(entry), let id = song["songId"] as? Int64, id > 0,
-                  let title = archive.string(song["songName"]), !title.isEmpty,
-                  let duration = archive.value(song["song_Duration"]) as? NSNumber,
-                  duration.doubleValue.isFinite, (0...604_800).contains(duration.doubleValue),
-                  let singer = archive.dictionary(song["singerInfo"]),
-                  let artist = archive.string(singer["name"]), !artist.isEmpty else { return nil }
+            guard let song = archive.dictionary(entry),
+                  let title = archive.string(song["songName"]), !title.isEmpty else { continue }
+            let id = max(0, archive.integer(song["songId"]) ?? 0)
+            let rawDuration = archive.number(song["song_Duration"]) ?? 0
+            let duration = rawDuration.isFinite && (0...604_800).contains(rawDuration) ? rawDuration : 0
+            let artist = archive.dictionary(song["singerInfo"]).flatMap { archive.string($0["name"]) } ?? ""
             var artists: [String] = []
             if let singers = archive.dictionary(song["singerList"])?["NS.objects"] as? [Any], singers.count <= 64 {
                 artists = singers.compactMap { archive.dictionary($0).flatMap { archive.string($0["name"]) } }
@@ -99,8 +113,9 @@ enum NotchQQMusicSupport {
             let album = archive.dictionary(song["albumInfo"]).flatMap { archive.string($0["name"]) } ?? ""
             songs.append(Song(index: index, songID: id, mid: archive.string(song["song_Mid"]) ?? "",
                               title: title, artist: artists.isEmpty ? artist : artists.joined(separator: " / "),
-                              album: album, duration: duration.doubleValue))
+                              album: album, duration: duration, primaryArtist: artist))
         }
+        guard entries.isEmpty || !songs.isEmpty else { return nil }
         return Playlist(songs: songs, savedIndex: savedIndex)
     }
 
@@ -240,8 +255,29 @@ enum NotchQQMusicSupport {
         }
         func dictionary(_ reference: Any?) -> [String: Any]? { value(reference) as? [String: Any] }
         func string(_ reference: Any?, limit: Int = 4096) -> String? {
-            guard let text = value(reference) as? String, text.utf8.count <= limit else { return nil }
-            return text
+            var current = reference
+            // NSString can be a scalar; NSMutableString is an NS.string
+            // wrapper. Its payload may itself be a UID. Never instantiate
+            // archive classes, and bound indirection in malformed archives.
+            for _ in 0..<16 {
+                guard let resolved = value(current) else { return nil }
+                if let text = resolved as? String { return text.utf8.count <= limit ? text : nil }
+                guard let wrapper = resolved as? [String: Any], let payload = wrapper["NS.string"] else { return nil }
+                current = payload
+            }
+            return nil
+        }
+        func number(_ reference: Any?) -> Double? {
+            if let raw = value(reference) as? NSNumber, CFGetTypeID(raw) != CFBooleanGetTypeID() {
+                return raw.doubleValue
+            }
+            return string(reference, limit: 64).flatMap(Double.init)
+        }
+        func integer(_ reference: Any?) -> Int64? {
+            if let raw = value(reference) as? NSNumber, CFGetTypeID(raw) != CFBooleanGetTypeID() {
+                return Int64(exactly: raw.doubleValue)
+            }
+            return string(reference, limit: 32).flatMap(Int64.init)
         }
     }
 }
